@@ -48,3 +48,6 @@ def get_job(job_id: str):
         raise HTTPException(
             status_code=500, detail=f"Cosmos error: {getattr(e, 'message', str(e))}"
         )
+
+
+# caca
