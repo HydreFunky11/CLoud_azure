@@ -29,7 +29,7 @@ jobs:
       - name: Docker Build and Push
         uses: docker/build-push-action@v6
         with:
-          context: ./src/frontend
+          context: ./src/frontend/fronend-doc
           push: true
           # Injection des variables d'environnement pour le build Next.js
           build-args: |
