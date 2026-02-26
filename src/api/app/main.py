@@ -16,7 +16,7 @@ app.add_middleware(
         "http://localhost:3001",
         "https://ton-app-frontend.azurewebsites.net",  # Ajoute l'URL de ton frontend Azure plus tard
     ],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],  # Autorise GET, POST, PUT, OPTIONS, etc.
     allow_headers=["*"],  # Autorise tous les headers (Content-Type, etc.)
 )
