@@ -29,7 +29,7 @@ def create_job(req: JobCreateRequest):
         status=entity["status"],
         createdAt=entity["createdAt"],
         uploadUrl=upload_url,
-        type=["type"],
+        type=entity["type"],
     )
 
 
