@@ -19,6 +19,7 @@ class JobCreateResponse(BaseModel):
     status: str
     createdAt: str
     uploadUrl: str
+    type: str
 
 
 def job_to_entity(req: JobCreateRequest) -> Dict[str, Any]:
@@ -30,6 +31,7 @@ def job_to_entity(req: JobCreateRequest) -> Dict[str, Any]:
         "status": "CREATED",
         "fileName": req.fileName,
         "contentType": req.contentType,
+        "type": "",
         "createdAt": ts,
         "updatedAt": ts,
         "resultSummary": None,

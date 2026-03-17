@@ -11,14 +11,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "https://frontend-doc-e5dcfeayfmcjctbj.francecentral-01.azurewebsites.net",
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],  # Autorise GET, POST, PUT, OPTIONS, etc.
-    allow_headers=["*"],  # Autorise tous les headers (Content-Type, etc.)
+    allow_origins=["*"],  # Temporaire pour debug
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(jobs_router)
