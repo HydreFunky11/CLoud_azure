@@ -19,7 +19,7 @@ class JobCreateResponse(BaseModel):
     status: str
     createdAt: str
     uploadUrl: str
-    type: str
+    type: str = ""
 
 
 def job_to_entity(req: JobCreateRequest) -> Dict[str, Any]:
