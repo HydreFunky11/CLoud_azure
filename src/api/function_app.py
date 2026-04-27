@@ -4,34 +4,31 @@ import os
 from datetime import datetime, timezone
 import azure.functions as func
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from app.cosmos import get_cosmos_container
 
 app = func.FunctionApp()
 
-# Récupération des configurations Service Bus depuis les variables d'environnement
+# Configuration
 SERVICE_BUS_CONN_STR = os.getenv("SERVICE_BUS_CONNECTION_STRING")
 QUEUE_NAME = os.getenv("SERVICE_BUS_QUEUE_NAME")
 
+# --- FUNCTION 1: BLOB TRIGGER ---
 @app.blob_trigger(arg_name="myblob", 
                   path="input/{name}", 
                   connection="blob_connection_string") 
 def blob_to_servicebus_trigger(myblob: func.InputStream):
-    # Le nom complet du blob (ex: input/123_cv.pdf)
     blob_full_name = myblob.name 
-    # Extraire juste le nom du fichier sans le préfixe du conteneur
-    # myblob.name contient souvent "container/path/file.ext"
     relative_path = blob_full_name.split("/", 1)[-1] if "/" in blob_full_name else blob_full_name
     
     logging.info(f"Fichier détecté : {blob_full_name} ({myblob.length} bytes)")
 
     try:
-        # Extraction du documentId et fileName à partir de "123_cv.pdf"
         if "_" in relative_path:
             document_id, file_name = relative_path.split("_", 1)
         else:
             document_id = "UNKNOWN"
             file_name = relative_path
 
-        # Préparation du message JSON
         message_data = {
             "documentId": document_id,
             "fileName": file_name,
@@ -40,7 +37,6 @@ def blob_to_servicebus_trigger(myblob: func.InputStream):
             "uploadedAt": datetime.now(timezone.utc).isoformat()
         }
         
-        # Envoi vers Service Bus
         if SERVICE_BUS_CONN_STR and QUEUE_NAME:
             with ServiceBusClient.from_connection_string(SERVICE_BUS_CONN_STR) as client:
                 with client.get_queue_sender(queue_name=QUEUE_NAME) as sender:
@@ -48,7 +44,74 @@ def blob_to_servicebus_trigger(myblob: func.InputStream):
                     sender.send_messages(message)
                     logging.info(f"Message envoyé vers Service Bus pour le document {document_id}")
         else:
-            logging.error("Configuration Service Bus manquante (SERVICE_BUS_CONNECTION_STRING ou SERVICE_BUS_QUEUE_NAME)")
+            logging.error("Configuration Service Bus manquante")
 
     except Exception as e:
         logging.error(f"Erreur lors du traitement du blob {blob_full_name} : {str(e)}")
+
+
+# --- FUNCTION 2: SERVICE BUS TRIGGER ---
+@app.service_bus_queue_trigger(arg_name="msg", 
+                               queue_name=os.getenv("SERVICE_BUS_QUEUE_NAME", "document-processing"), 
+                               connection="SERVICE_BUS_CONNECTION_STRING")
+def servicebus_processor(msg: func.ServiceBusMessage):
+    # 1. Lire le message
+    try:
+        body = msg.get_body().decode('utf-8')
+        data = json.loads(body)
+        document_id = data.get("documentId")
+        file_name = data.get("fileName", "").lower()
+        size = data.get("size", 0)
+        
+        logging.info(f"Traitement du message Service Bus pour le document : {document_id}")
+        
+        container = get_cosmos_container()
+        
+        # 2. Vérifier si le document existe dans Cosmos DB
+        try:
+            item = container.read_item(item=document_id, partition_key="JOB")
+        except Exception:
+            logging.error(f"Document {document_id} introuvable dans Cosmos DB")
+            return # On s'arrête ici si le doc n'existe pas
+
+        # 3. Règles de validation
+        if size == 0:
+            logging.warning(f"Fichier vide détecté pour {document_id}")
+            item["status"] = "ERROR"
+            item["error"] = "File is empty"
+        else:
+            # 4. Moteur de Tagging
+            tags = set()
+            
+            # Extensions
+            if file_name.endswith(".pdf"):
+                tags.update(["pdf", "document"])
+            elif file_name.endswith(".docx"):
+                tags.update(["word", "document"])
+            elif file_name.endswith(".png"):
+                tags.add("image")
+                
+            # Mots-clés
+            keywords_map = {
+                "cv": ["cv", "rh"],
+                "facture": ["facture", "comptabilite"],
+                "contrat": ["contrat", "administratif"],
+                "azure": ["azure", "cloud"],
+                "docker": ["docker", "devops"]
+            }
+            
+            for key, val in keywords_map.items():
+                if key in file_name:
+                    tags.update(val)
+            
+            # 5. Mise à jour Succès
+            item["status"] = "PROCESSED"
+            item["tags"] = list(tags)
+            item["processedAt"] = datetime.now(timezone.utc).isoformat()
+            logging.info(f"Document {document_id} traité avec succès. Tags : {item['tags']}")
+
+        # 6. Sauvegarde finale dans Cosmos DB
+        container.replace_item(item=document_id, body=item)
+
+    except Exception as e:
+        logging.error(f"Erreur lors du traitement Service Bus : {str(e)}")
