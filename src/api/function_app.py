@@ -14,7 +14,7 @@ QUEUE_NAME = os.getenv("SERVICE_BUS_QUEUE_NAME")
 
 # --- FUNCTION 1: BLOB TRIGGER ---
 @app.blob_trigger(arg_name="myblob", 
-                  path="input/{jobId}/{fileName}", 
+                  path="doc-storage/input/{jobId}/{fileName}", 
                   connection="blob_connection_string") 
 def blob_to_servicebus_trigger(myblob: func.InputStream, jobId: str, fileName: str):
     blob_full_name = myblob.name 
