@@ -8,40 +8,48 @@ from app.cosmos import get_cosmos_container
 
 app = func.FunctionApp()
 
-# Configuration
-SERVICE_BUS_CONN_STR = os.getenv("SERVICE_BUS_CONNECTION_STRING")
-QUEUE_NAME = os.getenv("SERVICE_BUS_QUEUE_NAME")
-
 # --- FUNCTION 1: BLOB TRIGGER ---
 @app.blob_trigger(arg_name="myblob", 
-                  path="doc-storage/input/{jobId}/{fileName}", 
+                  path="doc-storage/input/{name}", 
                   connection="blob_connection_string") 
-def blob_to_servicebus_trigger(myblob: func.InputStream, jobId: str, fileName: str):
-    blob_full_name = myblob.name 
+def blob_to_servicebus_trigger(myblob: func.InputStream):
+    # Log immédiat pour confirmer que la fonction s'est lancée
+    logging.info(f"!!! TRIGGER BLOB ACTIVÉ !!! Fichier : {myblob.name}")
     
-    logging.info(f"Fichier détecté dans le dossier job : {blob_full_name} ({myblob.length} bytes)")
-
     try:
-        # Les variables jobId et fileName sont extraites automatiquement du path
+        # Récupération des configs au moment du déclenchement
+        conn_str = os.getenv("SERVICE_BUS_CONNECTION_STRING")
+        queue_name = os.getenv("SERVICE_BUS_QUEUE_NAME")
+        
+        blob_path = myblob.name # format: doc-storage/input/UUID/nom.pdf
+        parts = blob_path.split("/")
+        
+        # On essaie d'extraire le jobId et fileName intelligemment
+        # parts[0]=doc-storage, parts[1]=input, parts[2]=jobId, parts[3]=fileName
+        job_id = parts[2] if len(parts) > 2 else "UNKNOWN"
+        file_name = parts[3] if len(parts) > 3 else parts[-1]
+
         message_data = {
-            "documentId": jobId,
-            "fileName": fileName,
-            "blobName": blob_full_name,
+            "documentId": job_id,
+            "fileName": file_name,
+            "blobName": blob_path,
             "size": myblob.length,
             "uploadedAt": datetime.now(timezone.utc).isoformat()
         }
         
-        if SERVICE_BUS_CONN_STR and QUEUE_NAME:
-            with ServiceBusClient.from_connection_string(SERVICE_BUS_CONN_STR) as client:
-                with client.get_queue_sender(queue_name=QUEUE_NAME) as sender:
+        logging.info(f"Préparation message SB : {json.dumps(message_data)}")
+
+        if conn_str and queue_name:
+            with ServiceBusClient.from_connection_string(conn_str) as client:
+                with client.get_queue_sender(queue_name=queue_name) as sender:
                     message = ServiceBusMessage(json.dumps(message_data))
                     sender.send_messages(message)
-                    logging.info(f"Message envoyé vers Service Bus pour le document {document_id}")
+                    logging.info(f"SUCCESS: Message envoyé au Bus pour {job_id}")
         else:
-            logging.error("Configuration Service Bus manquante")
+            logging.error(f"ERREUR: Variables Service Bus manquantes (ConnStr: {bool(conn_str)}, Queue: {bool(queue_name)})")
 
     except Exception as e:
-        logging.error(f"Erreur lors du traitement du blob {blob_full_name} : {str(e)}")
+        logging.error(f"EXCEPTION dans le Trigger Blob : {str(e)}")
 
 
 # --- FUNCTION 2: SERVICE BUS TRIGGER ---
@@ -49,7 +57,7 @@ def blob_to_servicebus_trigger(myblob: func.InputStream, jobId: str, fileName: s
                                queue_name=os.getenv("SERVICE_BUS_QUEUE_NAME", "document-processing"), 
                                connection="SERVICE_BUS_CONNECTION_STRING")
 def servicebus_processor(msg: func.ServiceBusMessage):
-    # 1. Lire le message
+    logging.info("!!! TRIGGER SERVICE BUS ACTIVÉ !!!")
     try:
         body = msg.get_body().decode('utf-8')
         data = json.loads(body)
@@ -57,55 +65,39 @@ def servicebus_processor(msg: func.ServiceBusMessage):
         file_name = data.get("fileName", "").lower()
         size = data.get("size", 0)
         
-        logging.info(f"Traitement du message Service Bus pour le document : {document_id}")
+        logging.info(f"Processing doc {document_id}")
         
         container = get_cosmos_container()
         
-        # 2. Vérifier si le document existe dans Cosmos DB
         try:
             item = container.read_item(item=document_id, partition_key="JOB")
         except Exception:
-            logging.error(f"Document {document_id} introuvable dans Cosmos DB")
-            return # On s'arrête ici si le doc n'existe pas
+            logging.error(f"Document {document_id} introuvable dans Cosmos")
+            return
 
-        # 3. Règles de validation
         if size == 0:
-            logging.warning(f"Fichier vide détecté pour {document_id}")
             item["status"] = "ERROR"
             item["error"] = "File is empty"
         else:
-            # 4. Moteur de Tagging
             tags = set()
-            
-            # Extensions
-            if file_name.endswith(".pdf"):
-                tags.update(["pdf", "document"])
-            elif file_name.endswith(".docx"):
-                tags.update(["word", "document"])
-            elif file_name.endswith(".png"):
-                tags.add("image")
+            if file_name.endswith(".pdf"): tags.update(["pdf", "document"])
+            elif file_name.endswith(".docx"): tags.update(["word", "document"])
+            elif file_name.endswith(".png"): tags.add("image")
                 
-            # Mots-clés
             keywords_map = {
-                "cv": ["cv", "rh"],
-                "facture": ["facture", "comptabilite"],
-                "contrat": ["contrat", "administratif"],
-                "azure": ["azure", "cloud"],
+                "cv": ["cv", "rh"], "facture": ["facture", "comptabilite"],
+                "contrat": ["contrat", "administratif"], "azure": ["azure", "cloud"],
                 "docker": ["docker", "devops"]
             }
-            
             for key, val in keywords_map.items():
-                if key in file_name:
-                    tags.update(val)
+                if key in file_name: tags.update(val)
             
-            # 5. Mise à jour Succès
             item["status"] = "PROCESSED"
             item["tags"] = list(tags)
             item["processedAt"] = datetime.now(timezone.utc).isoformat()
-            logging.info(f"Document {document_id} traité avec succès. Tags : {item['tags']}")
 
-        # 6. Sauvegarde finale dans Cosmos DB
         container.replace_item(item=document_id, body=item)
+        logging.info(f"SUCCESS: Job {document_id} mis à jour")
 
     except Exception as e:
-        logging.error(f"Erreur lors du traitement Service Bus : {str(e)}")
+        logging.error(f"EXCEPTION dans le processeur SB : {str(e)}")
