@@ -14,24 +14,18 @@ QUEUE_NAME = os.getenv("SERVICE_BUS_QUEUE_NAME")
 
 # --- FUNCTION 1: BLOB TRIGGER ---
 @app.blob_trigger(arg_name="myblob", 
-                  path="input/{name}", 
+                  path="input/{jobId}/{fileName}", 
                   connection="blob_connection_string") 
-def blob_to_servicebus_trigger(myblob: func.InputStream):
+def blob_to_servicebus_trigger(myblob: func.InputStream, jobId: str, fileName: str):
     blob_full_name = myblob.name 
-    relative_path = blob_full_name.split("/", 1)[-1] if "/" in blob_full_name else blob_full_name
     
-    logging.info(f"Fichier détecté : {blob_full_name} ({myblob.length} bytes)")
+    logging.info(f"Fichier détecté dans le dossier job : {blob_full_name} ({myblob.length} bytes)")
 
     try:
-        if "_" in relative_path:
-            document_id, file_name = relative_path.split("_", 1)
-        else:
-            document_id = "UNKNOWN"
-            file_name = relative_path
-
+        # Les variables jobId et fileName sont extraites automatiquement du path
         message_data = {
-            "documentId": document_id,
-            "fileName": file_name,
+            "documentId": jobId,
+            "fileName": fileName,
             "blobName": blob_full_name,
             "size": myblob.length,
             "uploadedAt": datetime.now(timezone.utc).isoformat()
