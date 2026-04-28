@@ -34,6 +34,7 @@ def create_job(req: JobCreateRequest):
 
 
 @router.get("", summary="Lister tous les jobs")
+@router.get("/", summary="Lister tous les jobs (slash)")
 def list_jobs():
     container = get_cosmos_container()
     try:
