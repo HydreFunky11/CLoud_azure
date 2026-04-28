@@ -33,6 +33,22 @@ def create_job(req: JobCreateRequest):
     )
 
 
+@router.get("", summary="Lister tous les jobs")
+def list_jobs():
+    container = get_cosmos_container()
+    try:
+        # On récupère tous les items ayant la partition key "JOB"
+        items = list(container.query_items(
+            query="SELECT * FROM c WHERE c.pk = 'JOB' ORDER BY c.createdAt DESC",
+            enable_cross_partition_query=True
+        ))
+        return items
+    except CosmosHttpResponseError as e:
+        raise HTTPException(
+            status_code=500, detail=f"Cosmos error: {getattr(e, 'message', str(e))}"
+        )
+
+
 @router.get(
     "/{job_id}",
     summary="Récupérer un job par ID",
