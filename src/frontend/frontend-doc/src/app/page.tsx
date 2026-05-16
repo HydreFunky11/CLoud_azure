@@ -1,6 +1,39 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import toast from "react-hot-toast";
+
+function notifyJobProcessed(fileName: string, tags?: string[]) {
+  const tagsSuffix = tags?.length ? ` — Tags : ${tags.join(", ")}` : "";
+  toast.success(`« ${fileName} » est prêt${tagsSuffix}`);
+}
+
+interface ApiErrorDetail {
+  step?: string;
+  message?: string;
+  jobId?: string;
+  fileName?: string;
+  jobCreated?: boolean;
+  fileUploaded?: boolean;
+}
+
+async function readApiError(res: Response): Promise<string> {
+  const body = await res.json().catch(() => ({}));
+  const detail: unknown = body.detail;
+
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    return String((detail as ApiErrorDetail).message);
+  }
+  if (typeof detail === "string") {
+    if (detail.startsWith("OpenAI error:") && detail.includes("insufficient_quota")) {
+      return "Quota OpenAI dépassé. Vérifiez votre facturation sur platform.openai.com.";
+    }
+    return detail;
+  }
+  return `Erreur serveur (${res.status})`;
+}
+
+type MessageType = "info" | "success" | "warning" | "error";
 
 interface Job {
   id: string;
@@ -18,20 +51,31 @@ export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<MessageType>("info");
+  const prevStatusRef = useRef<Record<string, string>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  // Charger les jobs au démarrage et toutes les 5 secondes
+  const showMessage = (text: string, type: MessageType) => {
+    setMessage(text);
+    setMessageType(type);
+  };
+
   const fetchJobs = async () => {
-    try {
-      const res = await fetch(`${API_URL}/jobs`);
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data);
+    const res = await fetch(`${API_URL}/jobs`);
+    if (!res.ok) return;
+    const data: Job[] = await res.json();
+    for (const job of data) {
+      const prev = prevStatusRef.current[job.id];
+      if (prev && prev !== "PROCESSED" && job.status === "PROCESSED") {
+        notifyJobProcessed(job.fileName, job.tags);
       }
-    } catch (err) {
-      console.error("Erreur lors de la récupération des jobs", err);
+      if (prev && prev !== "ERROR" && job.status === "ERROR" && job.error) {
+        toast.error(`« ${job.fileName} » : ${job.error}`);
+      }
+      prevStatusRef.current[job.id] = job.status;
     }
+    setJobs(data);
   };
 
   useEffect(() => {
@@ -47,53 +91,81 @@ export default function Home() {
   const handleUpload = async () => {
     if (!file) return;
     setLoading(true);
-    setMessage("Création du job...");
+    showMessage("Étape 1/3 — Création du job...", "info");
+
+    const fileName = file.name;
+    let jobId: string | undefined;
 
     try {
-      // 1. Créer le job
       const resCreate = await fetch(`${API_URL}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, contentType: file.type }),
+        body: JSON.stringify({ fileName, contentType: file.type }),
       });
 
-      if (!resCreate.ok) throw new Error("Erreur création job");
-      const { jobId, uploadUrl } = await resCreate.json();
+      if (!resCreate.ok) {
+        const errMsg = await readApiError(resCreate);
+        toast.error(`Étape 1/3 — Job : ${errMsg}`);
+        showMessage(`Échec à la création du job : ${errMsg}`, "error");
+        return;
+      }
 
-      // 2. Upload vers Azure Blob Storage
-      setMessage("Upload du fichier vers Azure...");
+      const created = await resCreate.json();
+      jobId = created.jobId;
+      const { uploadUrl } = created;
+
+      showMessage("Étape 2/3 — Envoi du fichier vers Azure...", "info");
       const resUpload = await fetch(uploadUrl, {
         method: "PUT",
         headers: { "x-ms-blob-type": "BlockBlob" },
         body: file,
       });
 
-      if (!resUpload.ok) throw new Error("Échec de l'upload vers Azure");
+      if (!resUpload.ok) {
+        toast.error("Étape 2/3 — Upload Azure échoué");
+        showMessage(
+          `Le job existe (id: ${jobId}), mais le fichier n'a pas pu être envoyé sur Azure.`,
+          "warning"
+        );
+        fetchJobs();
+        return;
+      }
 
-      setMessage("Extraction des tags avec OpenAI...");
+      showMessage("Étape 3/3 — Extraction des tags avec OpenAI...", "info");
       const resTags = await fetch(`${API_URL}/jobs/${jobId}/tags`, {
         method: "POST",
       });
 
       if (!resTags.ok) {
-        const errBody = await resTags.json().catch(() => ({}));
-        const detail = errBody.detail ?? "Échec de l'extraction des tags";
-        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        const errMsg = await readApiError(resTags);
+        toast.error(`Étape 3/3 — OpenAI : ${errMsg}`, { duration: 8000 });
+        showMessage(
+          `Étapes 1-2 OK (job ${jobId}, fichier sur Azure). Étape 3 échouée : ${errMsg}`,
+          "warning"
+        );
+        if (jobId) prevStatusRef.current[jobId] = "UPLOADED";
+        fetchJobs();
+        return;
       }
 
-      setMessage("Succès ! Document analysé.");
+      const processedJob = await resTags.json();
+      if (jobId) prevStatusRef.current[jobId] = "PROCESSED";
+      notifyJobProcessed(fileName, processedJob.tags);
+      showMessage("Succès ! Job créé, fichier uploadé et document analysé.", "success");
       setFile(null);
       fetchJobs();
-    } catch (err: any) {
-      setMessage("Erreur : " + err.message);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Erreur inattendue";
+      toast.error(errMsg);
+      showMessage(errMsg, "error");
     } finally {
       setLoading(false);
-      setTimeout(() => setMessage(""), 5000);
+      setTimeout(() => setMessage(""), 10000);
     }
   };
 
   const getStatusBadge = (status: string) => {
-    const colors: any = {
+    const colors: Record<string, string> = {
       CREATED: "bg-blue-100 text-blue-800",
       UPLOADED: "bg-yellow-100 text-yellow-800",
       PROCESSED: "bg-green-100 text-green-800",
@@ -106,17 +178,23 @@ export default function Home() {
     );
   };
 
+  const messageColorClass = {
+    info: "text-blue-600",
+    success: "text-green-600",
+    warning: "text-amber-600",
+    error: "text-red-600",
+  }[messageType];
+
   return (
     <main className="max-w-4xl mx-auto p-8 font-sans">
       <h1 className="text-3xl font-bold mb-8 text-slate-800">Gestionnaire de Documents Cloud</h1>
 
-      {/* Zone Upload */}
       <section className="bg-white p-6 rounded-lg shadow-md mb-8 border border-slate-200">
         <h2 className="text-xl font-semibold mb-4">Nouveau Document</h2>
         <div className="flex flex-col gap-4">
-          <input 
-            type="file" 
-            onChange={handleFileChange} 
+          <input
+            type="file"
+            onChange={handleFileChange}
             className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
           <button
@@ -129,39 +207,48 @@ export default function Home() {
             {loading ? "En cours..." : "Lancer l'analyse"}
           </button>
           {message && (
-            <p className={`text-center text-sm font-medium ${message.includes("Erreur") ? "text-red-600" : "text-blue-600"}`}>
-              {message}
-            </p>
+            <p className={`text-center text-sm font-medium ${messageColorClass}`}>{message}</p>
           )}
         </div>
       </section>
 
-      {/* Liste des Jobs */}
       <section>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-slate-700">Flux de traitement</h2>
           <span className="text-xs text-slate-400">Actualisation auto toutes les 5s</span>
         </div>
-        
+
         <div className="grid gap-4">
-          {jobs.length === 0 && <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>}
-          
+          {jobs.length === 0 && (
+            <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>
+          )}
+
           {jobs.map((job) => (
-            <div key={job.id} className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3">
+            <div
+              key={job.id}
+              className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3"
+            >
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold text-slate-800 text-lg">{job.fileName}</h3>
-                  <p className="text-xs text-slate-400">ID: {job.id} • Créé le: {new Date(job.createdAt).toLocaleString()}</p>
+                  <p className="text-xs text-slate-400">
+                    ID: {job.id} • Créé le: {new Date(job.createdAt).toLocaleString()}
+                  </p>
                 </div>
                 {getStatusBadge(job.status)}
               </div>
 
-              {job.error && <p className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-100">{job.error}</p>}
+              {job.error && (
+                <p className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-100">{job.error}</p>
+              )}
 
               {job.tags && job.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-1">
                   {job.tags.map((tag) => (
-                    <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs border border-slate-200">
+                    <span
+                      key={tag}
+                      className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs border border-slate-200"
+                    >
                       #{tag}
                     </span>
                   ))}
