@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import * as signalR from "@microsoft/signalr";
 
 interface Job {
   id: string;
@@ -20,8 +21,9 @@ export default function Home() {
   const [message, setMessage] = useState("");
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || API_URL;
 
-  // Charger les jobs au démarrage et toutes les 5 secondes
+  // 1. Charger les jobs au démarrage
   const fetchJobs = async () => {
     try {
       const res = await fetch(`${API_URL}/jobs`);
@@ -34,10 +36,36 @@ export default function Home() {
     }
   };
 
+  // 2. Connexion SignalR pour le Temps Réel
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 5000);
-    return () => clearInterval(interval);
+
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl(`${FUNCTIONS_URL}/api`)
+      .withAutomaticReconnect()
+      .build();
+
+    connection.on("jobUpdated", (updatedJob: Job) => {
+      console.log("SignalR Update:", updatedJob);
+      setJobs((prevJobs) => {
+        const index = prevJobs.findIndex((j) => j.id === updatedJob.id || j.id === updatedJob.documentId);
+        const normalizedJob = { ...updatedJob, id: updatedJob.id || (updatedJob as any).documentId };
+        
+        if (index !== -1) {
+          const newJobs = [...prevJobs];
+          newJobs[index] = { ...newJobs[index], ...normalizedJob };
+          return newJobs;
+        } else {
+          return [normalizedJob, ...prevJobs];
+        }
+      });
+    });
+
+    connection.start().catch(err => console.error("SignalR Connection Error: ", err));
+
+    return () => {
+      connection.stop();
+    };
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -70,20 +98,13 @@ export default function Home() {
 
       if (!resUpload.ok) throw new Error("Échec de l'upload vers Azure");
 
-      setMessage("Extraction des tags avec OpenAI...");
-      const resTags = await fetch(`${API_URL}/jobs/${jobId}/tags`, {
-        method: "POST",
-      });
+      setMessage("Analyse en cours (Temps réel)...");
+      
+      // Note: On n'appelle plus forcément /tags ici car la Function 2 (Service Bus) s'en occupe
+      // Mais si on veut garder l'extraction OpenAI synchrone, on peut la laisser.
+      // Pour le moment, on laisse SignalR faire la mise à jour automatique.
 
-      if (!resTags.ok) {
-        const errBody = await resTags.json().catch(() => ({}));
-        const detail = errBody.detail ?? "Échec de l'extraction des tags";
-        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
-      }
-
-      setMessage("Succès ! Document analysé.");
       setFile(null);
-      fetchJobs();
     } catch (err: any) {
       setMessage("Erreur : " + err.message);
     } finally {
@@ -108,11 +129,17 @@ export default function Home() {
 
   return (
     <main className="max-w-4xl mx-auto p-8 font-sans">
-      <h1 className="text-3xl font-bold mb-8 text-slate-800">Gestionnaire de Documents Cloud</h1>
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="text-3xl font-bold text-slate-800">Gestionnaire de Documents Cloud</h1>
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          <span className="text-xs text-slate-500 font-medium">Temps Réel Actif</span>
+        </div>
+      </div>
 
       {/* Zone Upload */}
       <section className="bg-white p-6 rounded-lg shadow-md mb-8 border border-slate-200">
-        <h2 className="text-xl font-semibold mb-4">Nouveau Document</h2>
+        <h2 className="text-xl font-semibold mb-4 text-slate-700">Nouveau Document</h2>
         <div className="flex flex-col gap-4">
           <input 
             type="file" 
@@ -138,16 +165,13 @@ export default function Home() {
 
       {/* Liste des Jobs */}
       <section>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold text-slate-700">Flux de traitement</h2>
-          <span className="text-xs text-slate-400">Actualisation auto toutes les 5s</span>
-        </div>
+        <h2 className="text-xl font-semibold text-slate-700 mb-4">Flux de traitement</h2>
         
         <div className="grid gap-4">
           {jobs.length === 0 && <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>}
           
           {jobs.map((job) => (
-            <div key={job.id} className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3">
+            <div key={job.id} className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3 transition-all hover:border-blue-200">
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold text-slate-800 text-lg">{job.fileName}</h3>

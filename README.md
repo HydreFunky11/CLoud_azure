@@ -24,17 +24,18 @@ L'application utilise une architecture événementielle pour garantir la scalabi
 - [x] Support des redirections de slash sur Azure pour éviter les erreurs 405.
 - [x] Intégration du SDK Cosmos DB pour le stockage permanent.
 
-### Pipeline Asynchrone (Azure Functions)
+### Pipeline Asynchrone & Temps Réel
 - [x] **Function 1** : Implémentation du Blob Trigger avec extraction intelligente du `jobId` et du `fileName`.
 - [x] **Service Bus** : Configuration de l'envoi de messages JSON formatés.
-- [x] **Function 2** : Système de tagging automatique basé sur les extensions (`.pdf`, `.docx`, `.png`) et des mots-clés (`cv`, `facture`, `azure`, etc.).
-- [x] **Validation** : Détection des fichiers vides (0 octet) avec passage en statut `ERROR`.
+- [x] **SignalR** : Intégration de Azure SignalR Service pour les notifications Push en temps réel.
+- [x] **Negotiate** : Création de l'endpoint de négociation SignalR pour le Frontend.
+- [x] **Function 2** : Système de tagging automatique basé sur les extensions et mots-clés.
+- [x] **Validation** : Détection des fichiers vides (0 octet).
 
 ### Frontend (Quality of Life)
 - [x] Dashboard moderne avec liste des jobs en temps réel.
+- [x] **Temps Réel Actif** : Mise à jour automatique des badges et tags via WebSocket (SignalR) sans rafraîchir la page.
 - [x] Badges de statut colorés (`CREATED`, `UPLOADED`, `PROCESSED`, `ERROR`).
-- [x] Auto-refresh toutes les 5 secondes pour suivre l'avancement sans recharger la page.
-- [x] Affichage dynamique des tags générés.
 
 ### DevOps
 - [x] Workflows GitHub Actions pour le déploiement automatique des fonctions et de l'API.
