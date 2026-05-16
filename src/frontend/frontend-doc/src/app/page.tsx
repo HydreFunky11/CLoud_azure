@@ -1,7 +1,20 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import * as signalR from "@microsoft/signalr";
 import toast from "react-hot-toast";
+
+interface Job {
+  id: string;
+  documentId?: string;
+  fileName: string;
+  status: string;
+  createdAt: string;
+  processedAt?: string;
+  tags?: string[];
+  error?: string;
+  size?: number;
+}
 
 function notifyJobProcessed(fileName: string, tags?: string[]) {
   const tagsSuffix = tags?.length ? ` — Tags : ${tags.join(", ")}` : "";
@@ -35,17 +48,6 @@ async function readApiError(res: Response): Promise<string> {
 
 type MessageType = "info" | "success" | "warning" | "error";
 
-interface Job {
-  id: string;
-  fileName: string;
-  status: string;
-  createdAt: string;
-  processedAt?: string;
-  tags?: string[];
-  error?: string;
-  size?: number;
-}
-
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -55,6 +57,7 @@ export default function Home() {
   const prevStatusRef = useRef<Record<string, string>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || API_URL;
 
   const showMessage = (text: string, type: MessageType) => {
     setMessage(text);
@@ -62,26 +65,62 @@ export default function Home() {
   };
 
   const fetchJobs = async () => {
-    const res = await fetch(`${API_URL}/jobs`);
-    if (!res.ok) return;
-    const data: Job[] = await res.json();
-    for (const job of data) {
-      const prev = prevStatusRef.current[job.id];
-      if (prev && prev !== "PROCESSED" && job.status === "PROCESSED") {
-        notifyJobProcessed(job.fileName, job.tags);
+    try {
+      const res = await fetch(`${API_URL}/jobs`);
+      if (!res.ok) return;
+      const data: Job[] = await res.json();
+      
+      // Update local storage of statuses for toast detection
+      for (const job of data) {
+        prevStatusRef.current[job.id] = job.status;
       }
-      if (prev && prev !== "ERROR" && job.status === "ERROR" && job.error) {
-        toast.error(`« ${job.fileName} » : ${job.error}`);
-      }
-      prevStatusRef.current[job.id] = job.status;
+      setJobs(data);
+    } catch (err) {
+      console.error("Erreur lors de la récupération des jobs", err);
     }
-    setJobs(data);
   };
 
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 5000);
-    return () => clearInterval(interval);
+
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl(`${FUNCTIONS_URL}/api`)
+      .withAutomaticReconnect()
+      .build();
+
+    connection.on("jobUpdated", (updatedJob: Job) => {
+      const jobId = updatedJob.id || updatedJob.documentId;
+      if (!jobId) return;
+
+      const normalizedJob = { ...updatedJob, id: jobId };
+      
+      setJobs((prevJobs) => {
+        const index = prevJobs.findIndex((j) => j.id === jobId);
+        
+        // Notification logic
+        const prevStatus = prevStatusRef.current[jobId];
+        if (prevStatus !== "PROCESSED" && normalizedJob.status === "PROCESSED") {
+          notifyJobProcessed(normalizedJob.fileName, normalizedJob.tags);
+        } else if (prevStatus !== "ERROR" && normalizedJob.status === "ERROR") {
+          toast.error(`« ${normalizedJob.fileName} » : ${normalizedJob.error || "Erreur de traitement"}`);
+        }
+        prevStatusRef.current[jobId] = normalizedJob.status;
+
+        if (index !== -1) {
+          const newJobs = [...prevJobs];
+          newJobs[index] = { ...newJobs[index], ...normalizedJob };
+          return newJobs;
+        } else {
+          return [normalizedJob, ...prevJobs];
+        }
+      });
+    });
+
+    connection.start().catch(err => console.error("SignalR Connection Error: ", err));
+
+    return () => {
+      connection.stop();
+    };
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -91,12 +130,12 @@ export default function Home() {
   const handleUpload = async () => {
     if (!file) return;
     setLoading(true);
-    showMessage("Étape 1/3 — Création du job...", "info");
+    showMessage("Étape 1/2 — Création du job...", "info");
 
     const fileName = file.name;
-    let jobId: string | undefined;
 
     try {
+      // 1. Créer le job
       const resCreate = await fetch(`${API_URL}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,16 +144,17 @@ export default function Home() {
 
       if (!resCreate.ok) {
         const errMsg = await readApiError(resCreate);
-        toast.error(`Étape 1/3 — Job : ${errMsg}`);
+        toast.error(`Étape 1/2 — Job : ${errMsg}`);
         showMessage(`Échec à la création du job : ${errMsg}`, "error");
         return;
       }
 
       const created = await resCreate.json();
-      jobId = created.jobId;
-      const { uploadUrl } = created;
+      const { jobId, uploadUrl } = created;
+      prevStatusRef.current[jobId] = "CREATED";
 
-      showMessage("Étape 2/3 — Envoi du fichier vers Azure...", "info");
+      // 2. Upload vers Azure Blob Storage
+      showMessage("Étape 2/2 — Envoi du fichier vers Azure...", "info");
       const resUpload = await fetch(uploadUrl, {
         method: "PUT",
         headers: { "x-ms-blob-type": "BlockBlob" },
@@ -122,7 +162,7 @@ export default function Home() {
       });
 
       if (!resUpload.ok) {
-        toast.error("Étape 2/3 — Upload Azure échoué");
+        toast.error("Étape 2/2 — Upload Azure échoué");
         showMessage(
           `Le job existe (id: ${jobId}), mais le fichier n'a pas pu être envoyé sur Azure.`,
           "warning"
@@ -131,29 +171,9 @@ export default function Home() {
         return;
       }
 
-      showMessage("Étape 3/3 — Extraction des tags avec OpenAI...", "info");
-      const resTags = await fetch(`${API_URL}/jobs/${jobId}/tags`, {
-        method: "POST",
-      });
-
-      if (!resTags.ok) {
-        const errMsg = await readApiError(resTags);
-        toast.error(`Étape 3/3 — OpenAI : ${errMsg}`, { duration: 8000 });
-        showMessage(
-          `Étapes 1-2 OK (job ${jobId}, fichier sur Azure). Étape 3 échouée : ${errMsg}`,
-          "warning"
-        );
-        if (jobId) prevStatusRef.current[jobId] = "UPLOADED";
-        fetchJobs();
-        return;
-      }
-
-      const processedJob = await resTags.json();
-      if (jobId) prevStatusRef.current[jobId] = "PROCESSED";
-      notifyJobProcessed(fileName, processedJob.tags);
-      showMessage("Succès ! Job créé, fichier uploadé et document analysé.", "success");
+      showMessage("Succès ! Upload terminé. Analyse en cours (Temps réel)...", "success");
       setFile(null);
-      fetchJobs();
+      // La mise à jour du statut viendra par SignalR (UPLOADED puis PROCESSED)
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : "Erreur inattendue";
       toast.error(errMsg);
@@ -187,14 +207,20 @@ export default function Home() {
 
   return (
     <main className="max-w-4xl mx-auto p-8 font-sans">
-      <h1 className="text-3xl font-bold mb-8 text-slate-800">Gestionnaire de Documents Cloud</h1>
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="text-3xl font-bold text-slate-800">Gestionnaire de Documents Cloud</h1>
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          <span className="text-xs text-slate-500 font-medium">Temps Réel Actif</span>
+        </div>
+      </div>
 
       <section className="bg-white p-6 rounded-lg shadow-md mb-8 border border-slate-200">
-        <h2 className="text-xl font-semibold mb-4">Nouveau Document</h2>
+        <h2 className="text-xl font-semibold mb-4 text-slate-700">Nouveau Document</h2>
         <div className="flex flex-col gap-4">
-          <input
-            type="file"
-            onChange={handleFileChange}
+          <input 
+            type="file" 
+            onChange={handleFileChange} 
             className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
           <button
@@ -207,7 +233,9 @@ export default function Home() {
             {loading ? "En cours..." : "Lancer l'analyse"}
           </button>
           {message && (
-            <p className={`text-center text-sm font-medium ${messageColorClass}`}>{message}</p>
+            <p className={`text-center text-sm font-medium ${messageColorClass}`}>
+              {message}
+            </p>
           )}
         </div>
       </section>
@@ -215,40 +243,28 @@ export default function Home() {
       <section>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-slate-700">Flux de traitement</h2>
-          <span className="text-xs text-slate-400">Actualisation auto toutes les 5s</span>
+          <span className="text-xs text-slate-400">Notifications temps réel via SignalR</span>
         </div>
-
+        
         <div className="grid gap-4">
-          {jobs.length === 0 && (
-            <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>
-          )}
-
+          {jobs.length === 0 && <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>}
+          
           {jobs.map((job) => (
-            <div
-              key={job.id}
-              className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3"
-            >
+            <div key={job.id} className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3 transition-all hover:border-blue-200">
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold text-slate-800 text-lg">{job.fileName}</h3>
-                  <p className="text-xs text-slate-400">
-                    ID: {job.id} • Créé le: {new Date(job.createdAt).toLocaleString()}
-                  </p>
+                  <p className="text-xs text-slate-400">ID: {job.id} • Créé le: {new Date(job.createdAt).toLocaleString()}</p>
                 </div>
                 {getStatusBadge(job.status)}
               </div>
 
-              {job.error && (
-                <p className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-100">{job.error}</p>
-              )}
+              {job.error && <p className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-100">{job.error}</p>}
 
               {job.tags && job.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-1">
                   {job.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs border border-slate-200"
-                    >
+                    <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs border border-slate-200">
                       #{tag}
                     </span>
                   ))}
