@@ -57,7 +57,7 @@ export default function Home() {
   const prevStatusRef = useRef<Record<string, string>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || API_URL;
+  const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
   const showMessage = (text: string, type: MessageType) => {
     setMessage(text);
