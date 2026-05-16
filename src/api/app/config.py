@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     cosmos_container: str = "jobs"
     blob_connection_string: str
     blob_container: str
+    openai_api_key: str
+    openai_model: str = "gpt-4o-mini"
 
 
 settings = Settings()

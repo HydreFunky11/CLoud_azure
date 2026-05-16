@@ -20,3 +20,10 @@ def generate_upload_sas(blob_name: str):
     )
 
     return f"https://{blob_service.account_name}.blob.core.windows.net/{settings.blob_container}/{blob_name}?{sas_token}"
+
+
+def download_blob(blob_name: str) -> bytes:
+    blob_client = blob_service.get_blob_client(
+        container=settings.blob_container, blob=blob_name
+    )
+    return blob_client.download_blob().readall()
