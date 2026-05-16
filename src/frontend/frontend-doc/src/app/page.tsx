@@ -70,7 +70,18 @@ export default function Home() {
 
       if (!resUpload.ok) throw new Error("Échec de l'upload vers Azure");
 
-      setMessage("Succès ! Le traitement asynchrone a commencé.");
+      setMessage("Extraction des tags avec OpenAI...");
+      const resTags = await fetch(`${API_URL}/jobs/${jobId}/tags`, {
+        method: "POST",
+      });
+
+      if (!resTags.ok) {
+        const errBody = await resTags.json().catch(() => ({}));
+        const detail = errBody.detail ?? "Échec de l'extraction des tags";
+        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      }
+
+      setMessage("Succès ! Document analysé.");
       setFile(null);
       fetchJobs();
     } catch (err: any) {
