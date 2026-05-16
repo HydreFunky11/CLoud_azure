@@ -34,7 +34,8 @@ L'application utilise une architecture événementielle pour garantir la scalabi
 
 ### Frontend (Quality of Life)
 - [x] Dashboard moderne avec liste des jobs en temps réel.
-- [x] **Temps Réel Actif** : Mise à jour automatique des badges et tags via WebSocket (SignalR) sans rafraîchir la page.
+- [x] **Temps Réel Actif** : Mise à jour automatique des badges et tags via WebSocket (SignalR).
+- [x] **Notifications Toasts** : Intégration de `react-hot-toast` pour des alertes visuelles immédiates lors du succès ou de l'échec d'un traitement.
 - [x] Badges de statut colorés (`CREATED`, `UPLOADED`, `PROCESSED`, `ERROR`).
 
 ### DevOps
