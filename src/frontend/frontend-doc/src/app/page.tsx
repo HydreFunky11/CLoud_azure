@@ -59,6 +59,13 @@ export default function Home() {
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
+  // DEBUG: On log l'URL pour vérifier si elle est bien injectée au build
+  useEffect(() => {
+    console.log("Frontend initialized");
+    console.log("API_URL:", API_URL);
+    console.log("FUNCTIONS_URL:", FUNCTIONS_URL);
+  }, [API_URL, FUNCTIONS_URL]);
+
   const showMessage = (text: string, type: MessageType) => {
     setMessage(text);
     setMessageType(type);
@@ -206,65 +213,130 @@ export default function Home() {
   }[messageType];
 
   return (
-    <main className="max-w-4xl mx-auto p-8 font-sans">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-slate-800">Gestionnaire de Documents Cloud</h1>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-          <span className="text-xs text-slate-500 font-medium">Temps Réel Actif</span>
+    <main className="max-w-4xl mx-auto p-8 font-sans bg-slate-50 min-h-screen">
+      <div className="flex justify-between items-center mb-10 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+        <div>
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">DocManager Cloud</h1>
+          <p className="text-slate-500 text-sm mt-1">Analyse de documents en temps réel</p>
+        </div>
+        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200">
+          <span className="relative flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+          </span>
+          <span className="text-xs text-slate-700 font-bold uppercase tracking-wider">Live Sync</span>
         </div>
       </div>
 
-      <section className="bg-white p-6 rounded-lg shadow-md mb-8 border border-slate-200">
-        <h2 className="text-xl font-semibold mb-4 text-slate-700">Nouveau Document</h2>
-        <div className="flex flex-col gap-4">
-          <input 
-            type="file" 
-            onChange={handleFileChange} 
-            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-          />
+      {/* Zone Upload */}
+      <section className="bg-white p-8 rounded-2xl shadow-lg mb-10 border border-slate-100 transition-all hover:shadow-xl">
+        <h2 className="text-xl font-bold mb-6 text-slate-800 flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          Nouveau Document
+        </h2>
+        <div className="flex flex-col gap-6">
+          <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center bg-slate-50 transition-colors hover:border-blue-300 group">
+            <input 
+              type="file" 
+              onChange={handleFileChange} 
+              id="file-upload"
+              className="hidden"
+            />
+            <label htmlFor="file-upload" className="cursor-pointer">
+              <span className="text-slate-600 block mb-2 font-medium group-hover:text-blue-600 transition-colors">
+                {file ? file.name : "Cliquez pour choisir un fichier ou glissez-déposez"}
+              </span>
+              <span className="text-xs text-slate-400 italic">PDF, PNG, DOCX (Max 10Mo)</span>
+            </label>
+          </div>
+          
           <button
             onClick={handleUpload}
             disabled={loading || !file}
-            className={`w-full py-2 rounded-lg font-bold text-white transition-all ${
-              loading || !file ? "bg-slate-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 shadow-lg"
+            className={`w-full py-4 rounded-xl font-extrabold text-white transition-all transform active:scale-95 ${
+              loading || !file ? "bg-slate-300 cursor-not-allowed" : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md hover:shadow-lg"
             }`}
           >
-            {loading ? "En cours..." : "Lancer l'analyse"}
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Analyse en cours...
+              </span>
+            ) : "Lancer l'analyse intelligente"}
           </button>
+          
           {message && (
-            <p className={`text-center text-sm font-medium ${messageColorClass}`}>
+            <div className={`p-4 rounded-xl text-center text-sm font-bold border ${
+              messageType === 'error' ? "bg-red-50 text-red-700 border-red-100" : 
+              messageType === 'success' ? "bg-green-50 text-green-700 border-green-100" : 
+              "bg-blue-50 text-blue-700 border-blue-100"
+            }`}>
               {message}
-            </p>
+            </div>
           )}
         </div>
       </section>
 
+      {/* Liste des Jobs */}
       <section>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold text-slate-700">Flux de traitement</h2>
-          <span className="text-xs text-slate-400">Notifications temps réel via SignalR</span>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Flux de traitement</h2>
+          <div className="flex gap-2">
+            <div className="h-2 w-2 rounded-full bg-slate-200"></div>
+            <div className="h-2 w-2 rounded-full bg-slate-200"></div>
+          </div>
         </div>
         
-        <div className="grid gap-4">
-          {jobs.length === 0 && <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>}
+        <div className="grid gap-6">
+          {jobs.length === 0 && (
+            <div className="bg-white p-12 rounded-2xl border-2 border-dashed border-slate-200 text-center">
+              <p className="text-slate-400 italic">Aucun document dans la file de traitement.</p>
+            </div>
+          )}
           
           {jobs.map((job) => (
-            <div key={job.id} className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-3 transition-all hover:border-blue-200">
+            <div key={job.id} className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-4 transition-all hover:shadow-md hover:border-blue-100 group">
               <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="font-bold text-slate-800 text-lg">{job.fileName}</h3>
-                  <p className="text-xs text-slate-400">ID: {job.id} • Créé le: {new Date(job.createdAt).toLocaleString()}</p>
+                <div className="flex gap-4 items-center">
+                  <div className={`p-3 rounded-xl ${
+                    job.status === 'PROCESSED' ? 'bg-green-50 text-green-600' :
+                    job.status === 'ERROR' ? 'bg-red-50 text-red-600' :
+                    'bg-blue-50 text-blue-600'
+                  }`}>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-lg group-hover:text-blue-600 transition-colors">{job.fileName}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xs text-slate-400 font-medium">ID: {job.id.substring(0,8)}...</p>
+                      <span className="text-slate-300">•</span>
+                      <p className="text-xs text-slate-400">{new Date(job.createdAt).toLocaleTimeString()} ({new Date(job.createdAt).toLocaleDateString()})</p>
+                    </div>
+                  </div>
                 </div>
                 {getStatusBadge(job.status)}
               </div>
 
-              {job.error && <p className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-100">{job.error}</p>}
+              {job.error && (
+                <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center gap-3 text-red-600">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <p className="text-sm font-semibold">{job.error}</p>
+                </div>
+              )}
 
               {job.tags && job.tags.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-1">
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-50">
                   {job.tags.map((tag) => (
-                    <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs border border-slate-200">
+                    <span key={tag} className="bg-slate-50 text-slate-500 px-3 py-1 rounded-lg text-xs font-bold border border-slate-100 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 transition-all cursor-default">
                       #{tag}
                     </span>
                   ))}
