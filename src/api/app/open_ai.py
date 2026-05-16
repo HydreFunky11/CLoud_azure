@@ -1,7 +1,29 @@
 import json
 from functools import lru_cache
-from openai import OpenAI
+from openai import APIError, OpenAI, RateLimitError
+
 from .config import settings
+
+
+def openai_error_message(exc: Exception) -> str:
+    if isinstance(exc, RateLimitError):
+        return "Trop de requêtes OpenAI. Réessayez dans quelques instants."
+    if isinstance(exc, APIError):
+        body = getattr(exc, "body", None) or {}
+        err = body.get("error", {}) if isinstance(body, dict) else {}
+        code = err.get("code") if isinstance(err, dict) else None
+        if code == "insufficient_quota" or exc.status_code == 429:
+            return (
+                "Quota OpenAI dépassé. Vérifiez votre plan et la facturation sur "
+                "https://platform.openai.com/account/billing"
+            )
+    msg = str(exc)
+    if "insufficient_quota" in msg:
+        return (
+            "Quota OpenAI dépassé. Vérifiez votre plan et la facturation sur "
+            "https://platform.openai.com/account/billing"
+        )
+    return "Erreur lors de l'analyse OpenAI."
 
 
 @lru_cache
@@ -31,7 +53,6 @@ def extract_tags_from_text(text: str, file_name: str) -> list[str]:
     raw = (response.choices[0].message.content or "[]").strip()
     try:
         tags = json.loads(raw)
-        print(tags)
         return [str(t) for t in tags][:8] if isinstance(tags, list) else []
     except json.JSONDecodeError:
         return []

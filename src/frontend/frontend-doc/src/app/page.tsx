@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as signalR from "@microsoft/signalr";
+import toast from "react-hot-toast";
 
 interface Job {
   id: string;
+  documentId?: string;
   fileName: string;
   status: string;
   createdAt: string;
@@ -14,29 +16,70 @@ interface Job {
   size?: number;
 }
 
+function notifyJobProcessed(fileName: string, tags?: string[]) {
+  const tagsSuffix = tags?.length ? ` — Tags : ${tags.join(", ")}` : "";
+  toast.success(`« ${fileName} » est prêt${tagsSuffix}`);
+}
+
+interface ApiErrorDetail {
+  step?: string;
+  message?: string;
+  jobId?: string;
+  fileName?: string;
+  jobCreated?: boolean;
+  fileUploaded?: boolean;
+}
+
+async function readApiError(res: Response): Promise<string> {
+  const body = await res.json().catch(() => ({}));
+  const detail: unknown = body.detail;
+
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    return String((detail as ApiErrorDetail).message);
+  }
+  if (typeof detail === "string") {
+    if (detail.startsWith("OpenAI error:") && detail.includes("insufficient_quota")) {
+      return "Quota OpenAI dépassé. Vérifiez votre facturation sur platform.openai.com.";
+    }
+    return detail;
+  }
+  return `Erreur serveur (${res.status})`;
+}
+
+type MessageType = "info" | "success" | "warning" | "error";
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<MessageType>("info");
+  const prevStatusRef = useRef<Record<string, string>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || API_URL;
 
-  // 1. Charger les jobs au démarrage
+  const showMessage = (text: string, type: MessageType) => {
+    setMessage(text);
+    setMessageType(type);
+  };
+
   const fetchJobs = async () => {
     try {
       const res = await fetch(`${API_URL}/jobs`);
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data);
+      if (!res.ok) return;
+      const data: Job[] = await res.json();
+      
+      // Update local storage of statuses for toast detection
+      for (const job of data) {
+        prevStatusRef.current[job.id] = job.status;
       }
+      setJobs(data);
     } catch (err) {
       console.error("Erreur lors de la récupération des jobs", err);
     }
   };
 
-  // 2. Connexion SignalR pour le Temps Réel
   useEffect(() => {
     fetchJobs();
 
@@ -46,11 +89,23 @@ export default function Home() {
       .build();
 
     connection.on("jobUpdated", (updatedJob: Job) => {
-      console.log("SignalR Update:", updatedJob);
+      const jobId = updatedJob.id || updatedJob.documentId;
+      if (!jobId) return;
+
+      const normalizedJob = { ...updatedJob, id: jobId };
+      
       setJobs((prevJobs) => {
-        const index = prevJobs.findIndex((j) => j.id === updatedJob.id || j.id === updatedJob.documentId);
-        const normalizedJob = { ...updatedJob, id: updatedJob.id || (updatedJob as any).documentId };
+        const index = prevJobs.findIndex((j) => j.id === jobId);
         
+        // Notification logic
+        const prevStatus = prevStatusRef.current[jobId];
+        if (prevStatus !== "PROCESSED" && normalizedJob.status === "PROCESSED") {
+          notifyJobProcessed(normalizedJob.fileName, normalizedJob.tags);
+        } else if (prevStatus !== "ERROR" && normalizedJob.status === "ERROR") {
+          toast.error(`« ${normalizedJob.fileName} » : ${normalizedJob.error || "Erreur de traitement"}`);
+        }
+        prevStatusRef.current[jobId] = normalizedJob.status;
+
         if (index !== -1) {
           const newJobs = [...prevJobs];
           newJobs[index] = { ...newJobs[index], ...normalizedJob };
@@ -75,46 +130,62 @@ export default function Home() {
   const handleUpload = async () => {
     if (!file) return;
     setLoading(true);
-    setMessage("Création du job...");
+    showMessage("Étape 1/2 — Création du job...", "info");
+
+    const fileName = file.name;
 
     try {
       // 1. Créer le job
       const resCreate = await fetch(`${API_URL}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, contentType: file.type }),
+        body: JSON.stringify({ fileName, contentType: file.type }),
       });
 
-      if (!resCreate.ok) throw new Error("Erreur création job");
-      const { jobId, uploadUrl } = await resCreate.json();
+      if (!resCreate.ok) {
+        const errMsg = await readApiError(resCreate);
+        toast.error(`Étape 1/2 — Job : ${errMsg}`);
+        showMessage(`Échec à la création du job : ${errMsg}`, "error");
+        return;
+      }
+
+      const created = await resCreate.json();
+      const { jobId, uploadUrl } = created;
+      prevStatusRef.current[jobId] = "CREATED";
 
       // 2. Upload vers Azure Blob Storage
-      setMessage("Upload du fichier vers Azure...");
+      showMessage("Étape 2/2 — Envoi du fichier vers Azure...", "info");
       const resUpload = await fetch(uploadUrl, {
         method: "PUT",
         headers: { "x-ms-blob-type": "BlockBlob" },
         body: file,
       });
 
-      if (!resUpload.ok) throw new Error("Échec de l'upload vers Azure");
+      if (!resUpload.ok) {
+        toast.error("Étape 2/2 — Upload Azure échoué");
+        showMessage(
+          `Le job existe (id: ${jobId}), mais le fichier n'a pas pu être envoyé sur Azure.`,
+          "warning"
+        );
+        fetchJobs();
+        return;
+      }
 
-      setMessage("Analyse en cours (Temps réel)...");
-      
-      // Note: On n'appelle plus forcément /tags ici car la Function 2 (Service Bus) s'en occupe
-      // Mais si on veut garder l'extraction OpenAI synchrone, on peut la laisser.
-      // Pour le moment, on laisse SignalR faire la mise à jour automatique.
-
+      showMessage("Succès ! Upload terminé. Analyse en cours (Temps réel)...", "success");
       setFile(null);
-    } catch (err: any) {
-      setMessage("Erreur : " + err.message);
+      // La mise à jour du statut viendra par SignalR (UPLOADED puis PROCESSED)
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Erreur inattendue";
+      toast.error(errMsg);
+      showMessage(errMsg, "error");
     } finally {
       setLoading(false);
-      setTimeout(() => setMessage(""), 5000);
+      setTimeout(() => setMessage(""), 10000);
     }
   };
 
   const getStatusBadge = (status: string) => {
-    const colors: any = {
+    const colors: Record<string, string> = {
       CREATED: "bg-blue-100 text-blue-800",
       UPLOADED: "bg-yellow-100 text-yellow-800",
       PROCESSED: "bg-green-100 text-green-800",
@@ -127,6 +198,13 @@ export default function Home() {
     );
   };
 
+  const messageColorClass = {
+    info: "text-blue-600",
+    success: "text-green-600",
+    warning: "text-amber-600",
+    error: "text-red-600",
+  }[messageType];
+
   return (
     <main className="max-w-4xl mx-auto p-8 font-sans">
       <div className="flex justify-between items-center mb-8">
@@ -137,7 +215,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Zone Upload */}
       <section className="bg-white p-6 rounded-lg shadow-md mb-8 border border-slate-200">
         <h2 className="text-xl font-semibold mb-4 text-slate-700">Nouveau Document</h2>
         <div className="flex flex-col gap-4">
@@ -156,16 +233,18 @@ export default function Home() {
             {loading ? "En cours..." : "Lancer l'analyse"}
           </button>
           {message && (
-            <p className={`text-center text-sm font-medium ${message.includes("Erreur") ? "text-red-600" : "text-blue-600"}`}>
+            <p className={`text-center text-sm font-medium ${messageColorClass}`}>
               {message}
             </p>
           )}
         </div>
       </section>
 
-      {/* Liste des Jobs */}
       <section>
-        <h2 className="text-xl font-semibold text-slate-700 mb-4">Flux de traitement</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold text-slate-700">Flux de traitement</h2>
+          <span className="text-xs text-slate-400">Notifications temps réel via SignalR</span>
+        </div>
         
         <div className="grid gap-4">
           {jobs.length === 0 && <p className="text-slate-500 text-center py-8 italic">Aucun document traité pour le moment.</p>}

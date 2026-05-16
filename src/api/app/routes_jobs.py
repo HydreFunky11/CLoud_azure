@@ -5,9 +5,16 @@ from fastapi import APIRouter, HTTPException
 from .blob_service import download_blob, generate_upload_sas
 from .cosmos import get_cosmos_container
 from .models import JobCreateRequest, JobCreateResponse, job_to_entity, now_iso
-from .open_ai import extract_document_text, extract_tags_from_text
+from .open_ai import extract_document_text, extract_tags_from_text, openai_error_message
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def _persist_tagging_failure(container, item: dict, job_id: str, message: str) -> None:
+    item["status"] = "UPLOADED"
+    item["error"] = message
+    item["updatedAt"] = now_iso()
+    container.replace_item(item=job_id, body=item)
 
 
 @router.post("", response_model=JobCreateResponse, status_code=201)
@@ -96,10 +103,29 @@ def extract_tags(job_id: str):
     try:
         tags = extract_tags_from_text(text, file_name)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI error: {str(e)}")
+        message = openai_error_message(e)
+        try:
+            _persist_tagging_failure(container, item, job_id, message)
+        except CosmosHttpResponseError as cosmos_err:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cosmos error: {getattr(cosmos_err, 'message', str(cosmos_err))}",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "step": "openai",
+                "message": message,
+                "jobId": job_id,
+                "fileName": file_name,
+                "jobCreated": True,
+                "fileUploaded": True,
+            },
+        )
 
     ts = now_iso()
     item["tags"] = tags
+    item["error"] = None
     item["updatedAt"] = ts
     item["processedAt"] = ts
     item["status"] = "PROCESSED"
