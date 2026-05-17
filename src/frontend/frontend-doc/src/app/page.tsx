@@ -37,6 +37,7 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<MessageType>("info");
   const prevStatusRef = useRef<Record<string, string>>({});
+  const toastRefs = useRef<Record<string, string>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const FUNCTIONS_URL = process.env.NEXT_PUBLIC_FUNCTIONS_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -60,19 +61,26 @@ export default function Home() {
       const jobId = updatedJob.id || updatedJob.documentId;
       if (!jobId) return;
       const normalizedJob = { ...updatedJob, id: jobId };
-      
       setJobs((prevJobs) => {
         const index = prevJobs.findIndex((j) => j.id === jobId);
+
+        // Notification logic
         const prevStatus = prevStatusRef.current[jobId];
-        
+        const currentToastId = toastRefs.current[jobId];
+
         if (prevStatus !== "PROCESSED" && normalizedJob.status === "PROCESSED") {
-          notifyJobProcessed(normalizedJob.fileName, normalizedJob.tags);
+          const tagsSuffix = normalizedJob.tags?.length ? ` — Tags : ${normalizedJob.tags.join(", ")}` : "";
+          toast.success(`« ${normalizedJob.fileName} » est prêt${tagsSuffix}`, { id: currentToastId });
+          delete toastRefs.current[jobId];
         } else if (prevStatus !== "ERROR" && normalizedJob.status === "ERROR") {
-          toast.error(`« ${normalizedJob.fileName} » : ${normalizedJob.error || "Erreur"}`);
+          toast.error(`« ${normalizedJob.fileName} » : ${normalizedJob.error || "Erreur"}`, { id: currentToastId });
+          delete toastRefs.current[jobId];
         }
+
         prevStatusRef.current[jobId] = normalizedJob.status;
 
         if (index !== -1) {
+
           const newJobs = [...prevJobs];
           newJobs[index] = { ...newJobs[index], ...normalizedJob };
           return newJobs;
@@ -124,6 +132,9 @@ export default function Home() {
       };
       setJobs(prev => [newJob, ...prev]);
       prevStatusRef.current[jobId] = "CREATED";
+      
+      // Lancement du Toaster de chargement
+      toastRefs.current[jobId] = toast.loading(`Analyse de ${file.name}...`);
 
       setMessage("Upload du fichier...");
       const resUpload = await fetch(uploadUrl, {
