@@ -115,6 +115,16 @@ export default function Home() {
       if (!resCreate.ok) throw new Error(await readApiError(resCreate));
       const { jobId, uploadUrl } = await resCreate.json();
 
+      // AJOUT IMMÉDIAT DANS LA LISTE
+      const newJob: Job = {
+        id: jobId,
+        fileName: file.name,
+        status: "CREATED",
+        createdAt: new Date().toISOString()
+      };
+      setJobs(prev => [newJob, ...prev]);
+      prevStatusRef.current[jobId] = "CREATED";
+
       setMessage("Upload du fichier...");
       const resUpload = await fetch(uploadUrl, {
         method: "PUT",
