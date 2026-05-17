@@ -49,9 +49,9 @@ export default function Home() {
     // On définit explicitement les transports et on désactive les credentials si non authentifié
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(`${FUNCTIONS_URL}/api`, {
-        // En mode Serverless, SignalR a besoin de négocier mais Azure peut bloquer les credentials
-        // On force le mode anonyme pour éviter l'erreur "Access-Control-Allow-Credentials"
-        // si l'origine est '*'
+        skipNegotiation: false,
+        transport: signalR.HttpTransportType.WebSockets | signalR.HttpTransportType.LongPolling,
+        withCredentials: false // INDISPENSABLE quand le CORS est sur '*'
       })
       .withAutomaticReconnect()
       .build();
@@ -83,7 +83,14 @@ export default function Home() {
     });
 
     connection.start().catch(err => console.error("SignalR Connection Error: ", err));
-    return () => { connection.stop(); };
+
+    // Backup : refresh manuel toutes les 10s au cas où SignalR décroche
+    const backupInterval = setInterval(fetchJobs, 10000);
+
+    return () => { 
+      connection.stop(); 
+      clearInterval(backupInterval);
+    };
   }, [FUNCTIONS_URL]);
 
   const fetchJobs = async () => {
