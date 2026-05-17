@@ -7,6 +7,10 @@ _client: CosmosClient | None = None
 
 def get_cosmos_container():
     global _client
+    
+    if not settings.cosmos_endpoint or not settings.cosmos_key:
+        raise Exception("Configuration Cosmos DB incomplète (endpoint ou key manquante)")
+
     if _client is None:
         _client = CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key)
 
