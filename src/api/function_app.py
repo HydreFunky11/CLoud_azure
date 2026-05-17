@@ -6,16 +6,21 @@ import azure.functions as func
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from app.cosmos import get_cosmos_container
 
-app = func.FunctionApp()
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-# --- NEW: SIGNALR NEGOTIATION ---
-# Cette fonction permet au frontend de se connecter à SignalR
-@app.route(route="negotiate", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
+# Route de test pour vérifier si les fonctions HTTP marchent
+@app.route(route="ping", methods=["GET"])
+def ping(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse("pong", status_code=200)
+
+# --- SIGNALR NEGOTIATION ---
+@app.route(route="negotiate", methods=["POST"])
 @app.generic_input_binding(arg_name="connectionInfo", 
                            type="signalRConnectionInfo", 
                            hubName="serverless", 
                            connectionStringSetting="AzureSignalRConnectionString")
 def negotiate(req: func.HttpRequest, connectionInfo) -> func.HttpResponse:
+    logging.info("Negotiate request received")
     return func.HttpResponse(connectionInfo, status_code=200, mimetype="application/json")
 
 
