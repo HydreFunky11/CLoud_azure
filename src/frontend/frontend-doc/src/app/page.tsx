@@ -84,12 +84,8 @@ export default function Home() {
 
     connection.start().catch(err => console.error("SignalR Connection Error: ", err));
 
-    // Backup : refresh manuel toutes les 10s au cas où SignalR décroche
-    const backupInterval = setInterval(fetchJobs, 10000);
-
     return () => { 
       connection.stop(); 
-      clearInterval(backupInterval);
     };
   }, [FUNCTIONS_URL]);
 
