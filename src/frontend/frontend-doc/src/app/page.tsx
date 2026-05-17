@@ -12,6 +12,7 @@ interface Job {
   createdAt: string;
   processedAt?: string;
   tags?: string[];
+  taggingSource?: "openai" | "fallback";
   error?: string;
   size?: number;
 }
@@ -24,6 +25,9 @@ function notifyJobProcessed(fileName: string, tags?: string[]) {
 async function readApiError(res: Response): Promise<string> {
   const body = await res.json().catch(() => ({}));
   const detail: unknown = body.detail;
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    return String((detail as { message: string }).message);
+  }
   if (typeof detail === "string") return detail;
   return `Erreur serveur (${res.status})`;
 }
@@ -142,11 +146,35 @@ export default function Home() {
         headers: { "x-ms-blob-type": "BlockBlob" },
         body: file,
       });
-      if (!resUpload.ok) throw new Error("Échec de l'upload");
+      if (!resUpload.ok) throw new Error("Échec de l'upload vers Azure");
 
-      setMessage("Succès ! Analyse lancée.");
+      setMessage("Analyse OpenAI en cours...");
+      const resTags = await fetch(`${API_URL}/jobs/${jobId}/tags`, { method: "POST" });
+
+      if (!resTags.ok) {
+        const errMsg = await readApiError(resTags);
+        toast.error(`OpenAI : ${errMsg}`, { id: toastRefs.current[jobId], duration: 8000 });
+        setMessage(`Job créé et fichier sur Azure. Analyse OpenAI impossible : ${errMsg}`);
+        setMessageType("warning");
+        prevStatusRef.current[jobId] = "UPLOADED";
+        fetchJobs();
+        setFile(null);
+        return;
+      }
+
+      const processedJob = await resTags.json();
+      prevStatusRef.current[jobId] = "PROCESSED";
+      setJobs((prev) =>
+        prev.map((j) => (j.id === jobId ? { ...j, ...processedJob, id: jobId } : j))
+      );
+      notifyJobProcessed(file.name, processedJob.tags);
+      toast.dismiss(toastRefs.current[jobId]);
+      delete toastRefs.current[jobId];
+
+      setMessage("Succès ! Document analysé avec OpenAI.");
       setMessageType("success");
       setFile(null);
+      fetchJobs();
     } catch (err: any) {
       setMessage("Erreur : " + err.message);
       setMessageType("error");
@@ -214,7 +242,25 @@ export default function Home() {
                   </div>
                   <span style={getBadgeStyle(job.status)}>{job.status}</span>
                 </div>
-                {job.error && <div style={{ marginTop: "12px", padding: "12px", backgroundColor: "#fff1f2", color: "#b91c1c", borderRadius: "8px", fontSize: "13px" }}>{job.error}</div>}
+                {job.error && (
+                  <div
+                    style={{
+                      marginTop: "12px",
+                      padding: "12px",
+                      backgroundColor: job.taggingSource === "fallback" ? "#fffbeb" : "#fff1f2",
+                      color: job.taggingSource === "fallback" ? "#b45309" : "#b91c1c",
+                      borderRadius: "8px",
+                      fontSize: "13px",
+                    }}
+                  >
+                    {job.error}
+                  </div>
+                )}
+                {job.taggingSource && (
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "8px" }}>
+                    Tags via {job.taggingSource === "openai" ? "OpenAI" : "règles (fallback)"}
+                  </div>
+                )}
                 {job.tags && job.tags.length > 0 && (
                   <div style={{ marginTop: "16px", display: "flex", flexWrap: "wrap", gap: "8px", borderTop: "1px solid #f8fafc", paddingTop: "12px" }}>
                     {job.tags.map(t => <span key={t} style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "bold" }}>#{t}</span>)}

@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from app.cosmos import get_cosmos_container
+from app.blob_service import download_blob
+from app.open_ai import extract_document_text, resolve_tags
+from app.models import now_iso
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -88,37 +91,38 @@ def servicebus_processor(msg: func.ServiceBusMessage, signalRMessages: func.Out[
         body = msg.get_body().decode('utf-8')
         data = json.loads(body)
         document_id = data.get("documentId")
-        file_name = data.get("fileName", "").lower()
+        file_name = data.get("fileName", "")
         size = data.get("size", 0)
-        
+
         container = get_cosmos_container()
-        
+
         try:
             item = container.read_item(item=document_id, partition_key="JOB")
         except Exception:
             logging.error(f"Document {document_id} introuvable")
             return
 
-        if size == 0:
+        if item.get("status") == "PROCESSED":
+            logging.info(f"Job {document_id} déjà traité (API), notification SignalR uniquement")
+        elif size == 0:
             item["status"] = "ERROR"
             item["error"] = "File is empty"
+            item["updatedAt"] = now_iso()
         else:
-            tags = set()
-            if file_name.endswith(".pdf"): tags.update(["pdf", "document"])
-            elif file_name.endswith(".docx"): tags.update(["word", "document"])
-            elif file_name.endswith(".png"): tags.add("image")
-                
-            keywords_map = {
-                "cv": ["cv", "rh"], "facture": ["facture", "comptabilite"],
-                "contrat": ["contrat", "administratif"], "azure": ["azure", "cloud"],
-                "docker": ["docker", "devops"]
-            }
-            for key, val in keywords_map.items():
-                if key in file_name: tags.update(val)
-            
+            display_name = item.get("fileName", file_name)
+            content = download_blob(f"input/{document_id}/{display_name}")
+            text = extract_document_text(content, display_name)
+            result = resolve_tags(display_name, text)
             item["status"] = "PROCESSED"
-            item["tags"] = list(tags)
+            item["tags"] = result.tags
+            item["taggingSource"] = result.source
             item["processedAt"] = datetime.now(timezone.utc).isoformat()
+            item["updatedAt"] = item["processedAt"]
+            if result.warning:
+                item["error"] = f"Tagging fallback ({result.source}) : {result.warning}"
+                logging.warning(f"Job {document_id} tagged via fallback: {result.warning}")
+            else:
+                item["error"] = None
 
         # 1. Sauvegarde Cosmos DB
         container.replace_item(item=document_id, body=item)
