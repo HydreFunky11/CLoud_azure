@@ -27,7 +27,7 @@ def negotiate(req: func.HttpRequest, connectionInfo) -> func.HttpResponse:
 # --- FUNCTION 1: BLOB TRIGGER ---
 @app.blob_trigger(arg_name="myblob", 
                   path="doc-storage/input/{name}", 
-                  connection="blob_connection_string") 
+                  connection="BLOB_CONNECTION_STRING") 
 @app.generic_output_binding(arg_name="signalRMessages", 
                             type="signalR", 
                             hubName="serverless", 

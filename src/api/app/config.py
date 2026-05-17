@@ -10,14 +10,14 @@ class Settings(BaseSettings):
         populate_by_name=True
     )
 
-    # On rend tout optionnel pour éviter le crash AZFD0005 au démarrage
-    cosmos_endpoint: Optional[str] = None
-    cosmos_key: Optional[str] = None
-    cosmos_database: str = "db-doc"
-    cosmos_container: str = "jobs"
+    # On utilise les noms en MAJUSCULES pour correspondre au portail Azure
+    cosmos_endpoint: Optional[str] = Field(default=None, alias="COSMOS_ENDPOINT")
+    cosmos_key: Optional[str] = Field(default=None, alias="COSMOS_KEY")
+    cosmos_database: str = Field(default="db-doc", alias="COSMOS_DATABASE")
+    cosmos_container: str = Field(default="jobs", alias="COSMOS_CONTAINER")
     
-    blob_connection_string: Optional[str] = None
-    blob_container: str = "doc-storage"
+    blob_connection_string: Optional[str] = Field(default=None, alias="BLOB_CONNECTION_STRING")
+    blob_container: str = Field(default="doc-storage", alias="BLOB_CONTAINER")
     
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = "gpt-4o-mini"
